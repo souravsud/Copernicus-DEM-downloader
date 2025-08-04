@@ -4,7 +4,7 @@ import matplotlib.pyplot as plt
 
 
 # Path to your DEM file
-dem_path = "/cdse-copernicus-dem-downloader/output_dir/downloaded/clipped_dem_UTM.tif"
+dem_path = "/Users/ssudhakaran/Documents/Simulations/2025/Copernicus-DEM-downloader/data/extracted/askervein/clipped_dem_UTM.tif"
 
 with rasterio.open(dem_path) as src:
     dem = src.read(1)  # read the first (and only) band

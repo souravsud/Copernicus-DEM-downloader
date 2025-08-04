@@ -37,7 +37,7 @@ import regex as re
 import requests
 import shapely.wkt as wkt
 from colorlog import ColoredFormatter
-from credentials.credentials import Credentials
+from .credentials.credentials import Credentials
 from lxml import objectify
 from pykml import parser
 from requests.exceptions import HTTPError
@@ -401,7 +401,7 @@ def main(argv: list[str]) -> int:
     )
     arg_parser.add_argument("--reset", help="reset credentials", nargs="?", const="RESET")
 
-    args = arg_parser.parse_args()
+    args = arg_parser.parse_args(argv)
 
     log.info("<----------------------------------------------------------------------->")
     log.info("CDSE Copernicus DEM Downloader: Copernicus DEM retrieval for Sen2Cor")

@@ -1,15 +1,10 @@
-import os
 import rasterio
 from rasterio.merge import merge
 from rasterio.mask import mask
 from shapely.geometry import box, mapping
-import geopandas as gpd
-from rasterio.warp import calculate_default_transform, reproject, Resampling
-import numpy as np
-import pyvista as pv
-from rasterio.transform import xy
-from rasterio.transform import Affine
-from rasterio.windows import from_bounds
+import os
+import pyproj
+from rasterio.warp import transform_geom
 
 
 def latlon_to_hemispheric(lat, lon):
@@ -24,7 +19,14 @@ def sanitize_float_for_filename(value, decimals=3):
     return f"{value:.{decimals}f}".replace('.', '_')
 
 def merge_and_clip_dem(input_folder, output_folder, center_lat, center_lon, utm_epsg, crop_size_km):
-    
+    """
+    Merges and clips DEMs with accurate handling of coordinate systems.
+
+    This function first merges all GeoTIFFs in a folder, then accurately clips the
+    merged raster to a specified size (in km) around a given latitude and longitude.
+    It does this by leveraging a projected CRS (UTM) for the clipping operation,
+    ensuring that the crop size is accurate regardless of the location on Earth.
+    """
     lat_val, lat_hem, lon_val, lon_hem = latlon_to_hemispheric(center_lat, center_lon)
 
     filename = (
@@ -36,7 +38,7 @@ def merge_and_clip_dem(input_folder, output_folder, center_lat, center_lon, utm_
     
     output_file = os.path.join(output_folder, filename)
     os.makedirs(output_folder, exist_ok=True)
-    # Load all .tif files from folder
+
     tifs = [os.path.join(input_folder, f) for f in os.listdir(input_folder) if f.endswith('.tif')]
     if not tifs:
         raise ValueError("No .tif files found.")
@@ -45,7 +47,7 @@ def merge_and_clip_dem(input_folder, output_folder, center_lat, center_lon, utm_
 
     # Merge into a single raster
     mosaic, out_trans = merge(src_files_to_mosaic)
-    crs = src_files_to_mosaic[0].crs  # CRS of DEM
+    crs_dem = src_files_to_mosaic[0].crs  # CRS of the DEM, likely EPSG:4326
 
     out_meta = src_files_to_mosaic[0].meta.copy()
     out_meta.update({
@@ -53,21 +55,42 @@ def merge_and_clip_dem(input_folder, output_folder, center_lat, center_lon, utm_
         "height": mosaic.shape[1],
         "width": mosaic.shape[2],
         "transform": out_trans,
-        "crs": crs
+        "crs": crs_dem
     })
 
-    # Since CRS is EPSG:4326, convert km to degrees (~1 deg ≈ 111 km)
-    half_size_deg = crop_size_km / 111 / 2  # half size in degrees
+    # --- ACCURATE CLIPPING LOGIC ---
 
-    # Create bounding box in EPSG:4326
-    lat_min = center_lat - half_size_deg
-    lat_max = center_lat + half_size_deg
-    lon_min = center_lon - half_size_deg
-    lon_max = center_lon + half_size_deg
-    print(f"Clipping bounds: lat_min={lat_min}, lat_max={lat_max}, lon_min={lon_min}, lon_max={lon_max}")
+    # 1. Define the projected CRS for accurate distance calculation
+    # We will use the UTM zone specified by utm_epsg for this
+    utm_crs = f"EPSG:{utm_epsg}"
 
-    bbox = box(lon_min, lat_min, lon_max, lat_max)
-    geo = [mapping(bbox)]
+    # 2. Define the center point in both WGS84 and the projected UTM CRS
+    wgs84_point = (center_lon, center_lat)
+
+    # Use pyproj to transform the center point from WGS84 to the UTM CRS
+    transformer = pyproj.Transformer.from_crs("EPSG:4326", utm_crs, always_xy=True)
+    center_lon_utm, center_lat_utm = transformer.transform(center_lon, center_lat)
+
+    # 3. Create the bounding box in the projected UTM CRS
+    # All calculations are now in meters, ensuring accuracy
+    half_size_m = (crop_size_km * 1000) / 2
+    
+    utm_min_x = center_lon_utm - half_size_m
+    utm_min_y = center_lat_utm - half_size_m
+    utm_max_x = center_lon_utm + half_size_m
+    utm_max_y = center_lat_utm + half_size_m
+
+    # Create the box in the UTM CRS
+    utm_bbox = box(utm_min_x, utm_min_y, utm_max_x, utm_max_y)
+
+    print(f"Clipping bounds in UTM (m): X={utm_min_x}:{utm_max_x}, Y={utm_min_y}:{utm_max_y}")
+
+    # 4. Transform the UTM bounding box back to the DEM's CRS (EPSG:4326)
+    # This is necessary because rasterio's mask function expects the geometry to be
+    # in the same CRS as the raster it's clipping.
+    geo = [transform_geom(utm_crs, crs_dem, mapping(utm_bbox))]
+
+    # --- END OF ACCURATE CLIPPING LOGIC ---
 
     # Clip the merged DEM
     with rasterio.io.MemoryFile() as memfile:
@@ -87,5 +110,3 @@ def merge_and_clip_dem(input_folder, output_folder, center_lat, center_lon, utm_
 
     print(f"✅ Clipped DEM saved to: {output_file}")
     return output_file
-
-#merge_and_clip_dem(input_folder, output_folder, center_lat, center_lon, utm_epsg, size_km=crop_size_km)

@@ -1,13 +1,9 @@
 from cdse_copernicus_dem_downloader.cdse_copernicus_dem_downloader import main as dem_downloader
 from post_process.MergeAndCrop import merge_and_clip_dem
-from post_process.rotate_Crop import reproject_and_crop_to_utm_rotated
-import sys
 import mgrs
 
 def find_tile_from_coordinates(lat, lon):
     m = mgrs.MGRS()
-    #lat, lon = 39.7, -7.8  # Example: Perdigão, Portugal
-    lat, lon = 57.2181, -7.3398
     tile = m.toMGRS(lat, lon, MGRSPrecision=0)
     print(tile)  # Output: e.g., 29SNC
 
@@ -62,18 +58,19 @@ def run_dem_download_workflow(tile, resolution, download_folder):
 if __name__ == "__main__":
     download_folder = "/Users/ssudhakaran/Documents/Simulations/2025/Copernicus-DEM-downloader/data/downloaded/"
     output_folder = "/Users/ssudhakaran/Documents/Simulations/2025/Copernicus-DEM-downloader/data/extracted/"
-    stl_folder = "/Users/ssudhakaran/Documents/Simulations/2025/Copernicus-DEM-downloader/data/stl/"
+    cropped_folder = "/Users/ssudhakaran/Documents/Simulations/2025/Copernicus-DEM-downloader/data/cropped/"
 
     #Location details
-
-    center_lat=57.3511  # example: Perdigão
-    center_lon=-7.3858
-    crop_size_km = 40  # Crop size in km
+    center_lat=39.7088333 #perdigao
+    center_lon=-7.7355556
+    crop_size_km = 50  # Crop size in km
     resolution_m = 30  # resolution in meters
-    final_crop_size_km = 12  # Final crop size in km
-    wind_direction_deg = 270  # Example wind direction in degrees
+    final_crop_size_km = 15  # Final crop size in km
+    wind_direction_deg = 90  # Example wind direction in degrees
 
+    # Find the MGRS tile and EPSG code for the given coordinates
     tile, epsg =find_tile_from_coordinates(center_lat, center_lon)
+    # Run the DEM download workflow
     run_dem_download_workflow(tile, resolution_m, download_folder)
+    # Merge and clip the DEM data
     tif_file= merge_and_clip_dem(download_folder, output_folder, center_lat, center_lon, epsg, crop_size_km)
-    reproject_and_crop_to_utm_rotated(tif_file, stl_folder, center_lat, center_lon, epsg, wind_direction_deg, final_crop_size_km)

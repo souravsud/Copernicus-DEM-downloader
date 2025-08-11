@@ -178,4 +178,4 @@ Sen2Cor Toolbox v2.12.03 (and previous versions) supports CDSE-DGED DEM types. C
 
 ## Additional Capabilities:
 
-- The downloaded dem file is not formatted to .stl format- and also has rotation and cropping options
+- The downloaded dem file can now be formatted to .stl file- and also has rotation and cropping options

@@ -223,12 +223,16 @@ def create_mesh_from_dem(elevation_data, transform, pixel_res, crop_mask=None):
     X, Y = np.meshgrid(x, y)
     
     # Flip Y to match typical image orientation
-    Y = np.flipud(Y)
-    elevation_flipped = np.flipud(elevation_data)
-    valid_mask_flipped = np.flipud(valid_mask)
+    #Y = np.flipud(Y)
+    #elevation_flipped = np.flipud(elevation_data)
+    #valid_mask_flipped = np.flipud(valid_mask)
+
+
+    elevation_data_to_use = elevation_data
+    valid_mask_to_use = valid_mask  
     
     # Only create points for valid (non-NaN) areas
-    valid_indices = np.where(valid_mask_flipped)
+    valid_indices = np.where(valid_mask_to_use)
     n_valid_points = len(valid_indices[0])
     
     if n_valid_points == 0:
@@ -239,10 +243,11 @@ def create_mesh_from_dem(elevation_data, transform, pixel_res, crop_mask=None):
     # Create points array for valid data only
     valid_x = X[valid_indices]
     valid_y = Y[valid_indices]
-    valid_z = elevation_flipped[valid_indices]
+    valid_z = elevation_data_to_use[valid_indices]
     
     # Create a point cloud first
     points = np.column_stack((valid_x, valid_y, valid_z))
+    #points[:, 1] = -points[:, 1]
     point_cloud = pv.PolyData(points)
     
     # For irregularly distributed points (due to rotation), we need to create a surface
@@ -269,6 +274,8 @@ def create_mesh_from_dem(elevation_data, transform, pixel_res, crop_mask=None):
     mesh.point_data['elevation'] = valid_z
     
     print(f"Created triangulated mesh with {mesh.n_points} points and {mesh.n_cells} faces")
+    
+    test_orientation(elevation_data, mesh)
     
     return mesh
 
@@ -330,6 +337,7 @@ def create_rotated_stl_from_dem(dem_path, output_stl, crop_km, rotation_deg, cen
         # Step 4: Save as STL
         print(f"Saving STL file: {output_stl}")
         mesh.save(output_stl)
+        debug_coordinate_alignment(elevation_data, mesh, output_stl)
         
         print(f"Successfully created STL file: {output_stl}")
         print(f"Final mesh statistics:")
@@ -374,7 +382,7 @@ def smooth_terrain_for_cfd(elevation_data, sigma=2.0, preserve_nan=True):
     return smoothed
 
 
-def realign_rotated_stl(input_stl_path, output_stl_path, rotation_deg):
+def realign_rotated_stl(input_stl_path, output_stl_path, rotation_deg , flip_y=False, flip_x=False):
     """
     Realign a rotated STL to axis-aligned coordinates
     Applies counter-rotation to make terrain features align with X/Y axes
@@ -389,6 +397,10 @@ def realign_rotated_stl(input_stl_path, output_stl_path, rotation_deg):
     mesh = pv.read(input_stl_path)
     
     print(f"Original mesh bounds: {mesh.bounds}")
+    # DIAGNOSTIC: Find highest point before rotation
+    max_z_idx_before = np.argmax(mesh.points[:, 2])
+    highest_before = mesh.points[max_z_idx_before]
+    print(f"Highest point BEFORE realign: {highest_before}")
     print(f"Applying counter-rotation of {-rotation_deg}°...")
     
     # Get current points
@@ -403,12 +415,26 @@ def realign_rotated_stl(input_stl_path, output_stl_path, rotation_deg):
     x_new = points[:, 0] * cos_theta - points[:, 1] * sin_theta
     y_new = points[:, 0] * sin_theta + points[:, 1] * cos_theta
     
+    # Apply axis flips if requested
+    if flip_x:
+        print("Applying X-axis flip...")
+        x_new = -x_new
+    
+    if flip_y:
+        print("Applying Y-axis flip...")
+        y_new = -y_new
+
     # Create new mesh with realigned coordinates
     new_mesh = mesh.copy()
     new_mesh.points[:, 0] = x_new
     new_mesh.points[:, 1] = y_new
     # Z coordinates unchanged
     
+    # DIAGNOSTIC: Find highest point after rotation
+    max_z_idx_after = np.argmax(new_mesh.points[:, 2])
+    highest_after = new_mesh.points[max_z_idx_after]
+    print(f"Highest point AFTER realign: {highest_after}")
+
     print(f"Realigned mesh bounds: {new_mesh.bounds}")
     
     # Save the realigned STL
@@ -417,7 +443,8 @@ def realign_rotated_stl(input_stl_path, output_stl_path, rotation_deg):
     
     return output_stl_path
 
-def visualize_dem_and_stl_2d(original_tiff_path, stl_file_path, center_lat, center_lon, crop_size_km, rotation_deg):
+def visualize_dem_and_stl_2d_with_towers(original_tiff_path, stl_file_path, center_lat, center_lon, 
+                                        crop_size_km, rotation_deg, tower_latlons=None, tower_labels=None, stl_is_y_flipped=False):
     """
     Simple 2D visualization:
     1) Original DEM with crop area marked (left)
@@ -438,7 +465,8 @@ def visualize_dem_and_stl_2d(original_tiff_path, stl_file_path, center_lat, cent
         center_utm_x, center_utm_y = latlon_to_utm(center_lat, center_lon, crs)
     else:
         utm_path, utm_crs = reproject_to_utm(original_tiff_path)
-        return visualize_dem_and_stl_2d(utm_path, stl_file_path, center_lat, center_lon, crop_size_km, rotation_deg)
+        return visualize_dem_and_stl_2d_with_towers(utm_path, stl_file_path, center_lat, center_lon, 
+                                                   crop_size_km, rotation_deg, tower_latlons, tower_labels, stl_is_y_flipped)
     
     # Create side-by-side plots
     fig, (ax1, ax2) = plt.subplots(1, 2, figsize=(16, 8))
@@ -469,7 +497,7 @@ def visualize_dem_and_stl_2d(original_tiff_path, stl_file_path, center_lat, cent
     
     # NEW: Add directional arrow to show the "top" of the rotated crop
     # Calculate arrow pointing to the top edge of the rotated rectangle
-    arrow_length = half_size * 0.8  # Make arrow slightly shorter than half the crop size
+    arrow_length = half_size * 0.5  # Make arrow slightly shorter than half the crop size
     # Top direction after rotation (pointing from center to top edge midpoint)
     arrow_end_x = center_utm_x + (0 * cos_theta - arrow_length * sin_theta)
     arrow_end_y = center_utm_y + (0 * sin_theta + arrow_length * cos_theta)
@@ -478,7 +506,21 @@ def visualize_dem_and_stl_2d(original_tiff_path, stl_file_path, center_lat, cent
     ax1.annotate('', xy=(arrow_end_x, arrow_end_y), xytext=(center_utm_x, center_utm_y),
                 arrowprops=dict(arrowstyle='->', color='red', lw=2, alpha=0.8))
 
-    
+    # ===== ADD TOWER PLOTTING FOR LEFT PLOT HERE =====
+    if tower_latlons is not None:
+        # Convert towers to UTM coordinates for left plot
+        transformer = Transformer.from_crs('EPSG:4326', crs, always_xy=True)
+        
+        for i, (lat, lon) in enumerate(tower_latlons):
+            utm_x, utm_y = transformer.transform(lon, lat)
+            label = tower_labels[i] if tower_labels and i < len(tower_labels) else f'Tower{i+1}'
+            
+            # Plot tower on left (DEM) plot
+            ax1.plot(utm_x, utm_y, 'ko', markersize=8, markerfacecolor='yellow', 
+                    markeredgewidth=2, label=label if i == 0 else "")
+            ax1.text(utm_x + 200, utm_y + 200, label, fontsize=9, fontweight='bold',
+                    bbox=dict(boxstyle='round,pad=0.2', facecolor='yellow', alpha=0.8))
+
     ax1.set_title(f'Original DEM with Crop Area\n(Rotation: {rotation_deg}°)')
     ax1.set_xlabel('Easting (m)')
     ax1.set_ylabel('Northing (m)')
@@ -490,6 +532,11 @@ def visualize_dem_and_stl_2d(original_tiff_path, stl_file_path, center_lat, cent
     try:
         stl_mesh = pv.read(stl_file_path)
         points = stl_mesh.points
+
+        # If STL was Y-flipped, account for it in visualization
+        #if stl_is_y_flipped:
+        #    points = points.copy()
+        #    points[:, 1] = -points[:, 1]  # Flip back for visualization consistency
         
         # Create regular grid for interpolation
         x_min, x_max = points[:, 0].min(), points[:, 0].max()
@@ -506,8 +553,27 @@ def visualize_dem_and_stl_2d(original_tiff_path, stl_file_path, center_lat, cent
                           (xi_grid, yi_grid), method='cubic')
         
         # Plot as image like the TIFF
+        origin_setting = 'lower' if stl_is_y_flipped else 'upper'
         im2 = ax2.imshow(zi_grid, extent=[x_min, x_max, y_min, y_max], 
-                cmap='terrain', origin='upper')  # Same as TIFF
+                cmap='terrain', origin=origin_setting)  # Same as TIFF
+        
+        # ===== ADD TOWER PLOTTING FOR RIGHT PLOT HERE =====
+        if tower_latlons is not None:
+            tower_stl_coords = convert_towers_to_stl_coords(tower_latlons, center_lat, center_lon, 
+                                                           crop_size_km, rotation_deg, crs)
+            print("Tower coordinates in STL crop area:")
+            print(tower_stl_coords)
+            
+            for i, (stl_x, stl_y) in enumerate(tower_stl_coords):
+                label = tower_labels[i] if tower_labels and i < len(tower_labels) else f'Tower{i+1}'
+                
+                # Check if tower is within plot bounds
+                if x_min <= stl_x <= x_max and y_min <= stl_y <= y_max:
+                    ax2.plot(stl_x, stl_y, 'ko', markersize=8, markerfacecolor='yellow', markeredgewidth=2)
+                    ax2.text(stl_x + 100, stl_y + 100, label, fontsize=9, fontweight='bold',
+                            bbox=dict(boxstyle='round,pad=0.2', facecolor='yellow', alpha=0.8))
+                else:
+                    print(f"{label} is outside the STL crop area")
         
         ax2.set_title(f'Cropped Content \nInterpolated to Grid')
         plt.colorbar(im2, ax=ax2, shrink=0.8, label='Elevation (m)')
@@ -524,22 +590,109 @@ def visualize_dem_and_stl_2d(original_tiff_path, stl_file_path, center_lat, cent
     return fig
 
 
+def convert_towers_to_stl_coords(tower_latlons, center_lat, center_lon, crop_size_km, rotation_deg, dem_crs):
+    """
+    Convert tower lat/lon coordinates to STL mesh coordinate system.
+    """
+    
+    transformer = Transformer.from_crs("EPSG:4326", dem_crs, always_xy=True)
+    
+    # Convert center to UTM
+    center_utm_x, center_utm_y = transformer.transform(center_lon, center_lat)
+    
+    # Convert towers to STL coordinates (centered at origin, rotated)
+    tower_stl_coords = []
+    angle_rad = np.deg2rad(-rotation_deg)  # Negative for inverse rotation
+    cos_theta, sin_theta = np.cos(angle_rad), np.sin(angle_rad)
+    
+    for lat, lon in tower_latlons:
+        # Convert to UTM first
+        utm_x, utm_y = transformer.transform(lon, lat)
+        
+        # Shift to center at origin
+        rel_x = utm_x - center_utm_x
+        rel_y = utm_y - center_utm_y
+        
+        # Apply inverse rotation to match STL coordinate system
+        stl_x = rel_x * cos_theta - rel_y * sin_theta
+        stl_y = rel_x * sin_theta + rel_y * cos_theta
+        
+        tower_stl_coords.append((stl_x, stl_y))
+    
+    return tower_stl_coords
 
+def test_orientation(elevation_data, mesh):
+    """Quick test to verify mesh orientation matches elevation data"""
+    print("\n=== Orientation Test ===")
+    
+    # Find highest point in elevation data
+    max_row, max_col = np.unravel_index(np.nanargmax(elevation_data), elevation_data.shape)
+    print(f"Highest point in elevation data at row {max_row}, col {max_col}")
+    print(f"Elevation value: {elevation_data[max_row, max_col]}")
+    
+    # Find highest point in mesh
+    max_z_idx = np.argmax(mesh.points[:, 2])
+    max_point = mesh.points[max_z_idx]
+    print(f"Highest point in mesh: {max_point}")
+    
+    # Check if relative positions match expectations
+    nrows, ncols = elevation_data.shape
+    print(f"Data shape: {nrows} rows x {ncols} cols")
+    print(f"Row {max_row} is {'near top' if max_row < nrows/2 else 'near bottom'} of image")
+    print(f"Y coordinate {max_point[1]} is {'positive' if max_point[1] > 0 else 'negative'}")
+    
+    # Additional checks for corners
+    print(f"\nCorner elevations:")
+    print(f"Top-left (0,0): {elevation_data[0, 0] if not np.isnan(elevation_data[0, 0]) else 'NaN'}")
+    print(f"Top-right (0,-1): {elevation_data[0, -1] if not np.isnan(elevation_data[0, -1]) else 'NaN'}")
+    print(f"Bottom-left (-1,0): {elevation_data[-1, 0] if not np.isnan(elevation_data[-1, 0]) else 'NaN'}")
+    print(f"Bottom-right (-1,-1): {elevation_data[-1, -1] if not np.isnan(elevation_data[-1, -1]) else 'NaN'}")
+    print("=========================\n")
 
+def debug_coordinate_alignment(elevation_data, mesh, stl_file_path):
+    """Debug coordinate alignment between elevation data and mesh"""
+    print("\n=== Coordinate Alignment Debug ===")
+    
+    # Find a distinctive feature in elevation data
+    max_row, max_col = np.unravel_index(np.nanargmax(elevation_data), elevation_data.shape)
+    print(f"Highest point in elevation data: row {max_row}, col {max_col}")
+    print(f"Value: {elevation_data[max_row, max_col]}")
+    
+    # Find corresponding point in mesh
+    max_z_idx = np.argmax(mesh.points[:, 2])
+    max_mesh_point = mesh.points[max_z_idx]
+    print(f"Highest point in mesh: {max_mesh_point}")
+    
+    # Load STL and check
+    stl_mesh = pv.read(stl_file_path)
+    stl_max_idx = np.argmax(stl_mesh.points[:, 2])
+    stl_max_point = stl_mesh.points[stl_max_idx]
+    print(f"Highest point in STL: {stl_max_point}")
+    
+    # Check if they represent the same feature
+    print(f"Do they have the same elevation? {np.isclose(max_mesh_point[2], stl_max_point[2], rtol=1e-3)}")
+    print("=====================================\n")
 
 # Example usage (you can modify this as needed)
 if __name__ == "__main__":
     # Your example parameters
     input_file = "/Users/ssudhakaran/Documents/Simulations/2025/Copernicus-DEM-downloader/data/extracted/DEM_crop_lat39_709N_lon7_736W_utm32629_size50km.tif"
     output_folder_final = "/Users/ssudhakaran/Documents/Simulations/2025/Copernicus-DEM-downloader/data/cropped"
-    center_lat = 39.7088333
-    center_lon = -7.7355556
+    center_lat = 39.71121111
+    center_lon = -7.73483333
     
     # Parameters for the final STL
-    rotation_deg = 200
-    final_crop_km = 30
+    rotation_deg = 45
+    final_crop_km = 31
     output_stl = os.path.join(output_folder_final, f"rotated_crop_{final_crop_km}km_{rotation_deg}deg.stl")
     aligned_stl = os.path.join(output_folder_final, f"rotated_crop_{final_crop_km}km_{rotation_deg}deg_realigned.stl")
+
+    tower_locations = [
+                    (39.70596389, -7.74371389),  # Tower 1
+                    (39.71121111, -7.73483333),  # Tower 2  
+                    (39.71360278, -7.73038333)   # Tower 3
+                    ]
+    tower_names = ["Tower_1", "Tower_2", "Tower_3"]
     
     # Create the rotated STL from the DEM
     create_rotated_stl_from_dem(
@@ -555,15 +708,20 @@ if __name__ == "__main__":
     realign_rotated_stl(
         input_stl_path=output_stl,
         output_stl_path=aligned_stl,
-        rotation_deg=-rotation_deg  # Your original rotation angle
+        rotation_deg=-rotation_deg,
+        flip_y= True,
+        flip_x= False  # Your original rotation angle
     )
 
-    """ visualize_dem_and_stl_2d(
+    visualize_dem_and_stl_2d_with_towers(
         original_tiff_path=input_file,
         stl_file_path=aligned_stl,
         center_lat=center_lat, 
         center_lon=center_lon,
         crop_size_km=final_crop_km,
-        rotation_deg=rotation_deg
-    ) """
+        rotation_deg=rotation_deg,
+        tower_latlons=tower_locations,
+        tower_labels=tower_names,
+        stl_is_y_flipped=True
+    )
 

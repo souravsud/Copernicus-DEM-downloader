@@ -175,3 +175,7 @@ Sen2Cor Toolbox v2.12.03 (and previous versions) supports CDSE-DGED DEM types. C
 
 - To report bugs, or for further questions, please visit the ESA STEP Forum page dedicated to Sen2Cor:
 [Sen2Cor SNAP Forum](https://forum.step.esa.int/c/optical-toolbox/sen2cor/).
+
+## Additional Capabilities:
+
+- The downloaded dem file can now be formatted to .stl file- and also has rotation and cropping options
